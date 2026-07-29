@@ -151,6 +151,62 @@
   font-weight: 650;
 }
 
+.pendingApprovalBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1.1rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(242, 106, 20, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 248, 243, 0.92);
+  color: #7d3716;
+}
+
+.pendingApprovalCopy {
+  min-width: 0;
+}
+
+.pendingApprovalCopy strong {
+  color: #8f3b12;
+  font-size: 0.84rem;
+}
+
+.pendingApprovalCopy p {
+  margin: 0.25rem 0 0;
+  color: #6d5144;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.pendingApprovalForm {
+  flex: 0 0 auto;
+}
+
+.resumeApprovalButton {
+  min-height: 38px;
+  padding: 0.55rem 0.8rem;
+  border: 0;
+  border-radius: 6px;
+  color: #fff;
+  background: #1c1f22;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.resumeApprovalButton:hover {
+  background: #080a0b;
+}
+
+.resumeApprovalButton:focus-visible {
+  outline: 3px solid rgba(242, 106, 20, 0.28);
+  outline-offset: 2px;
+}
+
 .loadingPage {
   display: grid;
   place-items: center;
@@ -464,6 +520,15 @@
   .transitionSummary,
   .planGrid {
     grid-template-columns: 1fr;
+  }
+
+  .pendingApprovalBanner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .resumeApprovalButton {
+    width: 100%;
   }
 
   .planCard {

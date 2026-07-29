@@ -19,6 +19,7 @@ import {
   getLystrConnectorConfig,
   getLystrConnectorStatus,
   prepareLystrStoreConnection,
+  updateLystrConnectorPlanTransition,
   type LystrConnectorStatus,
   type ShopifySubscriptionForLystr,
 } from "../lystr.server";
@@ -28,6 +29,11 @@ import {
   getCurrentShopifyBillingSubscription,
   isShopifyManualBillingEnabled,
 } from "../shopify-app-pricing.server";
+import {
+  SHOPIFY_BILLING_ATTEMPT_STATES,
+  clearShopifyBillingAttempt,
+  getShopifyBillingAttempt,
+} from "../shopify-billing-attempt.server";
 
 const LYSTR_STORES_URL = "https://lystr.ai/stores";
 const APP_FONT =
@@ -668,7 +674,7 @@ function isBillingApprovalRequiredMessage(message: string) {
 }
 
 function hasRemainingSubscriptionAccess(
-  subscription: ShopifySubscriptionForLystr
+  subscription: ShopifySubscriptionForLystr,
 ) {
   if (!subscription.currentPeriodEnd) {
     return false;
@@ -683,7 +689,7 @@ function hasRemainingSubscriptionAccess(
 }
 
 function canUseCurrentShopifySubscription(
-  subscription: ShopifySubscriptionForLystr
+  subscription: ShopifySubscriptionForLystr,
 ) {
   const status = subscription.status?.trim().toUpperCase();
 
@@ -711,7 +717,9 @@ function formatConnectorDate(value?: string | null) {
   }).format(date);
 }
 
-function isConnectorCancellationPending(connector?: LystrConnectorStatus | null) {
+function isConnectorCancellationPending(
+  connector?: LystrConnectorStatus | null,
+) {
   return (
     connector?.status?.toUpperCase() === "CANCELED" &&
     connector.accessAllowed === true
@@ -1061,30 +1069,96 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         throw error;
       }
 
-      console.error("Failed to cancel the replaced App Pricing subscription.", error);
+      console.error(
+        "Failed to cancel the replaced App Pricing subscription.",
+        error,
+      );
       throw new Response(
         "Your new plan is active, but Shopify has not confirmed cancellation of the previous App Pricing plan. Reload to retry before using Lystr.",
-        { status: 502 }
+        { status: 502 },
       );
     }
   }
   let connector: LystrConnectorStatus | null =
     statusResponse?.connector ?? null;
-  let connected = Boolean(store?.connected && store.accessToken && store.shopDomain);
+  let connected = Boolean(
+    store?.connected && store.accessToken && store.shopDomain,
+  );
   const canFinalizeWithCurrentSubscription =
     activeSubscription && canUseCurrentShopifySubscription(activeSubscription);
   const shouldFinalizeConnection = Boolean(
     isBillingReturn ||
-      (connector?.connectionPending && !connector.reconnectRequired),
+    (connector?.connectionPending && !connector.reconnectRequired),
   );
 
   if (
     session.accessToken &&
+    activeSubscription &&
     canFinalizeWithCurrentSubscription &&
     shouldFinalizeConnection &&
     (store?.apiKey || connector?.connectionPending)
   ) {
     try {
+      const billingAttempt = await getShopifyBillingAttempt(session.shop);
+      const billingAttemptPlanKey =
+        billingAttempt?.planKey === "basic" ||
+        billingAttempt?.planKey === "pro" ||
+        billingAttempt?.planKey === "premium"
+          ? billingAttempt.planKey
+          : null;
+      const attemptMatchesSubscription =
+        billingAttempt?.subscriptionId === activeSubscription.id;
+      const activeSubscriptionCreatedAt = activeSubscription.createdAt
+        ? new Date(activeSubscription.createdAt)
+        : null;
+      const canAttachUnassignedAttempt = Boolean(
+        billingAttempt &&
+        billingAttempt.state === SHOPIFY_BILLING_ATTEMPT_STATES.creating &&
+        !billingAttempt.subscriptionId &&
+        billingAttemptPlanKey &&
+        billingAttemptPlanKey === activeSubscription.planKey &&
+        activeSubscription.id !== connector?.shopifySubscriptionId &&
+        activeSubscriptionCreatedAt &&
+        !Number.isNaN(activeSubscriptionCreatedAt.getTime()) &&
+        activeSubscriptionCreatedAt.getTime() >=
+          billingAttempt.createdAt.getTime(),
+      );
+      let attemptWasCorrelated = attemptMatchesSubscription;
+
+      if (
+        billingAttempt &&
+        billingAttemptPlanKey &&
+        (attemptMatchesSubscription || canAttachUnassignedAttempt)
+      ) {
+        const scheduled = await updateLystrConnectorPlanTransition({
+          action: "schedule",
+          activatesAt: (
+            billingAttempt.activatesAt ?? billingAttempt.createdAt
+          ).toISOString(),
+          pendingSubscriptionId: activeSubscription.id,
+          planKey: billingAttemptPlanKey,
+          shopDomain: session.shop,
+          status: "PENDING_APPROVAL",
+        });
+        connector = scheduled.connector;
+        const scheduleConfirmedPending =
+          connector.pendingShopifySubscriptionId === activeSubscription.id &&
+          connector.pendingShopifyPlanKey === billingAttemptPlanKey &&
+          (connector.pendingShopifyPlanStatus === "PENDING_APPROVAL" ||
+            connector.pendingShopifyPlanStatus === "APPROVED");
+        const scheduleConfirmedCurrent =
+          connector.shopifySubscriptionId === activeSubscription.id;
+
+        if (!scheduleConfirmedPending && !scheduleConfirmedCurrent) {
+          throw new Error(
+            "Lystr did not correlate the approved Shopify subscription.",
+          );
+        }
+
+        attemptWasCorrelated =
+          attemptMatchesSubscription || scheduleConfirmedPending;
+      }
+
       const connectResult = await connectLystrStore({
         accessToken: session.accessToken,
         apiKey: store?.apiKey ?? undefined,
@@ -1092,11 +1166,48 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shopifySubscription: activeSubscription,
       });
       connector = connectResult.connector;
+      const connectedSubscriptionStatus =
+        connector.shopifySubscriptionStatus?.trim().toUpperCase() ?? "";
+
+      if (
+        connector.shopifySubscriptionId !== activeSubscription.id ||
+        (connectedSubscriptionStatus !== "ACTIVE" &&
+          connectedSubscriptionStatus !== "ACCEPTED")
+      ) {
+        throw new Error(
+          "Lystr did not adopt the approved Shopify subscription.",
+        );
+      }
+
       connected = Boolean(
-        connectResult.connector.accessAllowed && connectResult.connector.storeId
+        connectResult.connector.accessAllowed &&
+        connectResult.connector.storeId,
       );
+      if (billingAttempt && attemptWasCorrelated) {
+        const latestAttempt = await getShopifyBillingAttempt(session.shop);
+
+        if (
+          latestAttempt?.id === billingAttempt.id &&
+          latestAttempt.updatedAt.getTime() ===
+            billingAttempt.updatedAt.getTime()
+        ) {
+          await clearShopifyBillingAttempt({
+            attemptId: billingAttempt.id,
+            expectedUpdatedAt: billingAttempt.updatedAt,
+            shopDomain: session.shop,
+          }).catch((error) => {
+            console.warn(
+              "Failed to clear the completed billing attempt.",
+              error,
+            );
+          });
+        }
+      }
     } catch (error) {
-      console.error("Failed to finalize Lystr connector store connection.", error);
+      console.error(
+        "Failed to finalize Lystr connector store connection.",
+        error,
+      );
     }
   }
 
@@ -1167,7 +1278,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shopDomain: session.shop,
     });
     const canConnectWithCurrentSubscription =
-      activeSubscription && canUseCurrentShopifySubscription(activeSubscription);
+      activeSubscription &&
+      canUseCurrentShopifySubscription(activeSubscription);
 
     if (canConnectWithCurrentSubscription) {
       await connectLystrStore({
@@ -1204,10 +1316,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     console.error("Failed to connect Lystr store from Shopify app.", error);
 
-    return Response.json(
-      { error: errorMessage } satisfies ActionData,
-      { status: 400 },
-    );
+    return Response.json({ error: errorMessage } satisfies ActionData, {
+      status: 400,
+    });
   }
 
   if (isShopifyManualBillingEnabled()) {
@@ -1247,8 +1358,8 @@ export default function Index() {
     !isBillingIncomplete && (connected || actionData?.success === true);
   const isPaidAccessEnding = Boolean(
     isConnected &&
-      connector?.reconnectRequired === true &&
-      connector.accessAllowed
+    connector?.reconnectRequired === true &&
+    connector.accessAllowed,
   );
   const connectedBadgeContent = isPaidAccessEnding
     ? connector
@@ -1257,7 +1368,7 @@ export default function Index() {
     : "Active Shopify connector subscription.";
   const billingFeatureTitle = "Shopify approval";
   const paidPlanCreditValues = Object.values(config.planCredits ?? {}).filter(
-    (value): value is number => Number.isFinite(value) && value > 0
+    (value): value is number => Number.isFinite(value) && value > 0,
   );
   const minPaidPlanCredits =
     paidPlanCreditValues.length > 0 ? Math.min(...paidPlanCreditValues) : 0;

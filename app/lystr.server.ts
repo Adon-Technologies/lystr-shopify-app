@@ -178,13 +178,26 @@ export async function syncLystrConnectorBilling(input: {
 export async function updateLystrConnectorPlanTransition(input: {
   action: "clear" | "schedule";
   activatesAt?: string;
+  expectedPendingSubscriptionId?: string | null;
   pendingSubscriptionId?: string | null;
   planKey?: "free" | "basic" | "pro" | "premium";
   shopDomain: string;
-  status?: "SCHEDULED" | "PENDING_APPROVAL" | "APPROVED";
+  status?: "CANCEL_PENDING" | "SCHEDULED" | "PENDING_APPROVAL" | "APPROVED";
 }) {
   return requestLystr<{ connector: LystrConnectorStatus }>(
     "/api/shopify-connector/billing/plan-transition",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function cancelLystrConnectorBilling(input: {
+  shopDomain: string;
+}) {
+  return requestLystr<{ result: unknown }>(
+    "/api/shopify-connector/billing/cancel",
     {
       method: "POST",
       body: JSON.stringify(input),

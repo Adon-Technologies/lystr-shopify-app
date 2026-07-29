@@ -46,6 +46,7 @@ type PartnerSubscriptionItem = {
 
 const DEFAULT_APP_HANDLE = "lystr-connect";
 const PARTNER_API_VERSION = "2026-07";
+const LEGACY_REST_BILLING_API_VERSION = "2025-10";
 
 const MANUAL_SUBSCRIPTION_QUERY = `
   #graphql
@@ -102,6 +103,44 @@ const MANUAL_SUBSCRIPTION_BY_ID_QUERY = `
                   currencyCode
                 }
                 interval
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const MANUAL_PENDING_SUBSCRIPTIONS_QUERY = `
+  #graphql
+  query LystrPendingManualBillingSubscriptions {
+    currentAppInstallation {
+      allSubscriptions(
+        first: 20
+        reverse: true
+        sortKey: CREATED_AT
+      ) {
+        nodes {
+          id
+          name
+          status
+          test
+          trialDays
+          createdAt
+          currentPeriodEnd
+          lineItems {
+            id
+            plan {
+              pricingDetails {
+                __typename
+                ... on AppRecurringPricing {
+                  price {
+                    amount
+                    currencyCode
+                  }
+                  interval
+                }
               }
             }
           }
@@ -808,7 +847,7 @@ export async function getShopifyBillingSubscriptionById({
   }
 
   const subscription = json.data?.node;
-  const resolvedPlanKey = planKey ?? getManualPlanKey(subscription?.name);
+  const resolvedPlanKey = getManualPlanKey(subscription?.name) ?? planKey;
 
   if (!subscription?.id || !resolvedPlanKey) {
     return null;
@@ -840,6 +879,137 @@ export async function getShopifyBillingSubscriptionById({
   } satisfies ShopifySubscriptionForLystr;
 }
 
+export async function getLatestPendingManualBillingSubscription({
+  admin,
+}: {
+  admin: AdminGraphqlClient;
+}) {
+  const response = await admin.graphql(MANUAL_PENDING_SUBSCRIPTIONS_QUERY);
+  const json = (await response.json()) as {
+    data?: {
+      currentAppInstallation?: {
+        allSubscriptions?: {
+          nodes?: Array<{
+            id?: string | null;
+            name?: string | null;
+            status?: string | null;
+            test?: boolean | null;
+            trialDays?: number | null;
+            createdAt?: string | null;
+            currentPeriodEnd?: string | null;
+            lineItems?: ShopifySubscriptionForLystr["lineItems"] | null;
+          }> | null;
+        } | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string | null }>;
+  };
+
+  if (json.errors?.length) {
+    throw new Error(
+      json.errors[0]?.message || "Shopify pending subscription query failed.",
+    );
+  }
+
+  const pendingSubscription =
+    json.data?.currentAppInstallation?.allSubscriptions?.nodes?.find(
+      (subscription) =>
+        subscription.status?.trim().toUpperCase() === "PENDING" &&
+        Boolean(getManualPlanKey(subscription.name)),
+    ) ?? null;
+  const planKey = getManualPlanKey(pendingSubscription?.name);
+
+  if (!pendingSubscription?.id || !planKey) {
+    return null;
+  }
+
+  return {
+    billingSource: "manual" as const,
+    id: pendingSubscription.id,
+    name:
+      pendingSubscription.name ??
+      getAppPricingPlanDefinition(planKey)?.label ??
+      planKey,
+    planKey,
+    status: pendingSubscription.status ?? "PENDING",
+    test: pendingSubscription.test ?? false,
+    createdAt: pendingSubscription.createdAt ?? null,
+    currentPeriodEnd: pendingSubscription.currentPeriodEnd ?? null,
+    lineItems: pendingSubscription.lineItems ?? [],
+  } satisfies ShopifySubscriptionForLystr;
+}
+
+function getLegacyRecurringChargeId(subscriptionId: string) {
+  const match = subscriptionId
+    .trim()
+    .match(/^gid:\/\/shopify\/AppSubscription\/(\d+)$/);
+
+  return match?.[1] ?? null;
+}
+
+export async function recoverManualBillingApprovalUrl({
+  accessToken,
+  shopDomain,
+  subscriptionId,
+}: {
+  accessToken: string;
+  shopDomain: string;
+  subscriptionId: string;
+}) {
+  // GraphQL returns confirmationUrl only from appSubscriptionCreate; the
+  // AppSubscription object cannot return it later. This legacy read is only a
+  // recovery bridge for approvals created before Lystr persisted that URL.
+  const chargeId = getLegacyRecurringChargeId(subscriptionId);
+
+  if (!chargeId) {
+    return null;
+  }
+
+  const response = await fetch(
+    `https://${shopDomain}/admin/api/${LEGACY_REST_BILLING_API_VERSION}/recurring_application_charges/${chargeId}.json`,
+    {
+      headers: {
+        accept: "application/json",
+        "x-shopify-access-token": accessToken,
+      },
+    },
+  );
+  const json = (await response.json().catch(() => null)) as {
+    recurring_application_charge?: {
+      confirmation_url?: string | null;
+      created_at?: string | null;
+      id?: number | string | null;
+      status?: string | null;
+    } | null;
+    errors?: unknown;
+  } | null;
+
+  if (!response.ok) {
+    throw new Error(
+      `Shopify could not recover the pending approval (${response.status}).`,
+    );
+  }
+
+  const charge = json?.recurring_application_charge;
+  const confirmationUrl = charge?.confirmation_url?.trim() ?? "";
+  const status = charge?.status?.trim().toUpperCase() ?? "";
+
+  if (status !== "PENDING" || !confirmationUrl) {
+    return null;
+  }
+
+  const parsedConfirmationUrl = new URL(confirmationUrl);
+
+  if (parsedConfirmationUrl.protocol !== "https:") {
+    throw new Error("Shopify returned an invalid billing approval URL.");
+  }
+
+  return {
+    confirmationUrl: parsedConfirmationUrl.toString(),
+    createdAt: charge?.created_at ?? null,
+  };
+}
+
 export async function cancelManualBillingSubscription({
   admin,
   subscriptionId,
@@ -853,6 +1023,10 @@ export async function cancelManualBillingSubscription({
   const json = (await response.json()) as {
     data?: {
       appSubscriptionCancel?: {
+        appSubscription?: {
+          id?: string | null;
+          status?: string | null;
+        } | null;
         userErrors?: Array<{ message?: string | null }> | null;
       } | null;
     };
@@ -866,6 +1040,20 @@ export async function cancelManualBillingSubscription({
 
   if (errorMessage) {
     throw new Error(errorMessage);
+  }
+
+  const cancelledSubscription =
+    json.data?.appSubscriptionCancel?.appSubscription;
+  const cancelledStatus =
+    cancelledSubscription?.status?.trim().toUpperCase() ?? "";
+
+  if (
+    cancelledSubscription?.id !== subscriptionId ||
+    (cancelledStatus !== "CANCELLED" && cancelledStatus !== "CANCELED")
+  ) {
+    throw new Error(
+      "Shopify did not confirm cancellation of the active subscription.",
+    );
   }
 }
 

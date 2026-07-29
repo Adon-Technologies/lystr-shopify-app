@@ -43,3 +43,21 @@ model Store {
   modelImageUrls  String[]
   connected       Boolean  @default(false)
 }
+
+model ShopifyBillingAttempt {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  shopDomain        String    @unique
+  planKey           String
+  state             String
+  requestToken      String?
+  subscriptionId    String?
+  confirmationUrl   String?
+  leaseExpiresAt    DateTime?
+  approvalExpiresAt DateTime?
+  activatesAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([subscriptionId])
+  @@index([state, leaseExpiresAt])
+}
