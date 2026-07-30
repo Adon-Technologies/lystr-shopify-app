@@ -16,6 +16,7 @@ import {
   connectLystrStore,
   getLystrConnectorConfig,
   getLystrConnectorStatus,
+  recordLystrConnectorAuditEvent,
   syncLystrConnectorBilling,
   updateLystrConnectorPlanTransition,
   type LystrConnectorStatus,
@@ -1648,12 +1649,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     console.error("Failed to process Shopify billing selection.", error);
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Shopify could not process this billing selection.";
+
+    await recordLystrConnectorAuditEvent({
+      errorMessage,
+      event: "selection.failed",
+      level: "error",
+      message: `Failed to start the ${PLAN_LABELS[planKey]} Shopify subscription for ${session.shop}.`,
+      metadata: {
+        outcome: "failed",
+        planKey,
+      },
+      shopDomain: session.shop,
+    }).catch((auditError) => {
+      console.warn(
+        "Failed to record the Shopify subscription selection failure.",
+        auditError,
+      );
+    });
+
     return Response.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Shopify could not process this billing selection.",
+        error: errorMessage,
       },
       { status: 400 },
     );

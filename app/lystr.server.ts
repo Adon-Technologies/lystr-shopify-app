@@ -211,6 +211,21 @@ export async function updateLystrConnectorPlanTransition(input: {
   );
 }
 
+export async function recordLystrConnectorAuditEvent(input: {
+  errorMessage?: string | null;
+  event: string;
+  level: "error" | "info" | "success" | "warning";
+  message: string;
+  metadata?: Record<string, unknown>;
+  requestId?: string | null;
+  shopDomain: string;
+}) {
+  return requestLystr<{ recorded: boolean }>("/api/shopify-connector/audit", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function cancelLystrConnectorBilling(input: {
   shopDomain: string;
 }) {
