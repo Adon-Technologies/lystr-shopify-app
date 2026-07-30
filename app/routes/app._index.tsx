@@ -20,6 +20,7 @@ import {
   getLystrConnectorConfig,
   getLystrConnectorStatus,
   prepareLystrStoreConnection,
+  shouldFinalizeLystrStoreConnection,
   updateLystrConnectorPlanTransition,
   type LystrConnectorStatus,
   type ShopifySubscriptionForLystr,
@@ -1112,17 +1113,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   );
   const canFinalizeWithCurrentSubscription =
     activeSubscription && canUseCurrentShopifySubscription(activeSubscription);
-  const shouldFinalizeConnection = Boolean(
-    isBillingReturn ||
-    (connector?.connectionPending && !connector.reconnectRequired),
-  );
+  const shouldFinalizeConnection = shouldFinalizeLystrStoreConnection({
+    connector,
+    hasLocalApiKey: Boolean(store?.apiKey),
+    isBillingReturn,
+  });
 
   if (
     session.accessToken &&
     activeSubscription &&
     canFinalizeWithCurrentSubscription &&
-    shouldFinalizeConnection &&
-    (store?.apiKey || connector?.connectionPending)
+    shouldFinalizeConnection
   ) {
     try {
       const billingAttempt = await getShopifyBillingAttempt(session.shop);

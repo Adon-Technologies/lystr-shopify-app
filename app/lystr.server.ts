@@ -70,6 +70,24 @@ export type ShopifySubscriptionForLystr = {
   }[];
 };
 
+export function shouldFinalizeLystrStoreConnection({
+  connector,
+  hasLocalApiKey,
+  isBillingReturn,
+}: {
+  connector: LystrConnectorStatus | null | undefined;
+  hasLocalApiKey: boolean;
+  isBillingReturn: boolean;
+}) {
+  const hasPreparedStore = Boolean(hasLocalApiKey || connector?.storeId);
+
+  return Boolean(
+    hasPreparedStore &&
+      (isBillingReturn ||
+        (connector?.connectionPending && !connector.reconnectRequired)),
+  );
+}
+
 type LystrApiResponse<T> = T & {
   error?: string;
 };

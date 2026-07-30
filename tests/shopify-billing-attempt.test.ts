@@ -12,6 +12,7 @@ import {
 } from "../app/shopify-billing-attempt.server";
 import { buildManualBillingReturnUrl } from "../app/shopify-app-pricing.server";
 import { getLegacyBillingReturnLaunchUrl } from "../app/legacy-billing-return.server";
+import { shouldFinalizeLystrStoreConnection } from "../app/lystr.server";
 import { resetFakePrisma } from "./fake-db.server";
 
 const SHOP = "example.myshopify.com";
@@ -96,6 +97,50 @@ test("an authenticated embedded billing return is never redirected again", () =>
       request,
     }),
     null,
+  );
+});
+
+test("an active prepared store reconnects when its credentials are still pending", () => {
+  assert.equal(
+    shouldFinalizeLystrStoreConnection({
+      connector: {
+        accessAllowed: true,
+        billingApprovalRequired: false,
+        connectionPending: true,
+        creditsPerSuccessfulPayment: 120,
+        currency: "usd",
+        monthlyPrice: 10,
+        monthlyPriceCents: 1_000,
+        reconnectRequired: false,
+        status: "ACTIVE",
+        storeId: "store-id",
+      },
+      hasLocalApiKey: false,
+      isBillingReturn: false,
+    }),
+    true,
+  );
+});
+
+test("an authenticated billing return finalizes a prepared store even with stale pending status", () => {
+  assert.equal(
+    shouldFinalizeLystrStoreConnection({
+      connector: {
+        accessAllowed: true,
+        billingApprovalRequired: false,
+        connectionPending: false,
+        creditsPerSuccessfulPayment: 120,
+        currency: "usd",
+        monthlyPrice: 10,
+        monthlyPriceCents: 1_000,
+        reconnectRequired: false,
+        status: "ACTIVE",
+        storeId: "store-id",
+      },
+      hasLocalApiKey: false,
+      isBillingReturn: true,
+    }),
+    true,
   );
 });
 
