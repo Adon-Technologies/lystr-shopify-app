@@ -150,6 +150,15 @@ const MANUAL_PENDING_SUBSCRIPTIONS_QUERY = `
   }
 `;
 
+const MANUAL_BILLING_RETURN_URL_QUERY = `
+  #graphql
+  query LystrManualBillingReturnUrl {
+    currentAppInstallation {
+      launchUrl
+    }
+  }
+`;
+
 const CREATE_MANUAL_SUBSCRIPTION_MUTATION = `
   #graphql
   mutation LystrCreateManualSubscription(
@@ -675,32 +684,26 @@ export function getFreeShopifySubscription(
   });
 }
 
-function getManualBillingBaseUrl() {
-  const configuredUrl = process.env.SHOPIFY_APP_URL?.trim();
-
-  if (!configuredUrl) {
-    throw new Error("SHOPIFY_APP_URL is not configured.");
-  }
-
-  const url = new URL(configuredUrl);
-
-  if (url.protocol !== "https:" && url.hostname !== "localhost") {
-    throw new Error("SHOPIFY_APP_URL must use HTTPS.");
-  }
-
-  return url;
-}
-
-export function getManualBillingReturnUrl({
+export function buildManualBillingReturnUrl({
   cancelLegacySubscription,
   deferredPlanChange = false,
+  launchUrl,
   planKey,
 }: {
   cancelLegacySubscription: boolean;
   deferredPlanChange?: boolean;
+  launchUrl: string;
   planKey: AppPricingPlanKey;
 }) {
-  const url = new URL("/app", getManualBillingBaseUrl());
+  const url = new URL(launchUrl);
+
+  if (url.protocol !== "https:") {
+    throw new Error("Shopify returned an invalid app launch URL.");
+  }
+
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/app`;
+  url.search = "";
+  url.hash = "";
   url.searchParams.set("billing_return", "1");
   url.searchParams.set("requested_plan", planKey);
 
@@ -713,6 +716,43 @@ export function getManualBillingReturnUrl({
   }
 
   return url.toString();
+}
+
+export async function getManualBillingReturnUrl({
+  admin,
+  cancelLegacySubscription,
+  deferredPlanChange = false,
+  planKey,
+}: {
+  admin: AdminGraphqlClient;
+  cancelLegacySubscription: boolean;
+  deferredPlanChange?: boolean;
+  planKey: AppPricingPlanKey;
+}) {
+  const response = await admin.graphql(MANUAL_BILLING_RETURN_URL_QUERY);
+  const json = (await response.json()) as {
+    data?: {
+      currentAppInstallation?: {
+        launchUrl?: string | null;
+      } | null;
+    };
+    errors?: Array<{ message?: string | null }>;
+  };
+  const launchUrl = json.data?.currentAppInstallation?.launchUrl?.trim() ?? "";
+
+  if (json.errors?.length || !launchUrl) {
+    throw new Error(
+      json.errors?.[0]?.message ||
+        "Shopify did not return an authenticated app launch URL.",
+    );
+  }
+
+  return buildManualBillingReturnUrl({
+    cancelLegacySubscription,
+    deferredPlanChange,
+    launchUrl,
+    planKey,
+  });
 }
 
 export async function createManualBillingSubscription({

@@ -6,6 +6,7 @@ import type {
 import type { CSSProperties } from "react";
 import {
   Form,
+  Link,
   useActionData,
   useLoaderData,
   useNavigation,
@@ -737,6 +738,13 @@ function getConnectorMessage(connector: LystrConnectorStatus) {
       : "Subscription canceled. Access remains until the billing period ends.";
   }
 
+  if (
+    connector.pendingShopifyPlanStatus?.trim().toUpperCase() ===
+    "PENDING_APPROVAL"
+  ) {
+    return "Finish the existing Shopify billing approval to connect this store on the selected plan.";
+  }
+
   switch (status) {
     case "ACTIVE":
       return "Active Shopify connector subscription.";
@@ -1004,13 +1012,8 @@ function RedirectButton() {
 }
 
 function ShopifyPricingLink({ appPricingUrl }: { appPricingUrl: string }) {
-  return (
-    <a
-      href={appPricingUrl}
-      target="_top"
-      className={`${styles.pricingLink} lystr-pricing-link`}
-      style={criticalPricingLinkStyle}
-    >
+  const content = (
+    <>
       <img
         src="/shopifyImage.png"
         width="22"
@@ -1021,6 +1024,29 @@ function ShopifyPricingLink({ appPricingUrl }: { appPricingUrl: string }) {
       />
       <span>Open Shopify pricing</span>
       <ArrowRightIcon />
+    </>
+  );
+
+  if (appPricingUrl.startsWith("/")) {
+    return (
+      <Link
+        to={appPricingUrl}
+        className={`${styles.pricingLink} lystr-pricing-link`}
+        style={criticalPricingLinkStyle}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <a
+      href={appPricingUrl}
+      target="_top"
+      className={`${styles.pricingLink} lystr-pricing-link`}
+      style={criticalPricingLinkStyle}
+    >
+      {content}
     </a>
   );
 }
@@ -1349,11 +1375,14 @@ export default function Index() {
     status === "INCOMPLETE" ||
     status === "PAYMENT_REQUIRED" ||
     Boolean(connector?.billingApprovalRequired);
+  const hasPendingBillingApproval =
+    connector?.pendingShopifyPlanStatus?.trim().toUpperCase() ===
+    "PENDING_APPROVAL";
   const isBillingIncomplete =
     hasPendingStore &&
     shouldShowPricingButton &&
     actionData?.success !== true &&
-    connector?.accessAllowed !== true;
+    (hasPendingBillingApproval || connector?.accessAllowed !== true);
   const isConnected =
     !isBillingIncomplete && (connected || actionData?.success === true);
   const isPaidAccessEnding = Boolean(

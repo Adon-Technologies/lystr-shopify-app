@@ -1,8 +1,11 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { Outlet, redirect, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
+import prisma from "../db.server";
+import { getLegacyBillingReturnLaunchUrl } from "../legacy-billing-return.server";
+import { getShopifyAppHandle } from "../shopify-app-pricing.server";
 import { authenticate } from "../shopify.server";
 import "../styles/app-index.module.css";
 
@@ -11,6 +14,27 @@ const APP_FONT =
   'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const requestUrl = new URL(request.url);
+  const chargeId = requestUrl.searchParams.get("charge_id")?.trim() ?? "";
+  const subscriptionId = /^\d+$/.test(chargeId)
+    ? `gid://shopify/AppSubscription/${chargeId}`
+    : null;
+  const billingAttempt = subscriptionId
+    ? await prisma.shopifyBillingAttempt.findFirst({
+        where: { subscriptionId },
+        select: { shopDomain: true },
+      })
+    : null;
+  const legacyBillingReturnUrl = getLegacyBillingReturnLaunchUrl({
+    appHandle: getShopifyAppHandle(),
+    fallbackShopDomain: billingAttempt?.shopDomain,
+    request,
+  });
+
+  if (legacyBillingReturnUrl) {
+    throw redirect(legacyBillingReturnUrl);
+  }
+
   await authenticate.admin(request);
 
   // eslint-disable-next-line no-undef

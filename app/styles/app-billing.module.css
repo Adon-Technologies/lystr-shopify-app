@@ -185,6 +185,9 @@
 }
 
 .resumeApprovalButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 38px;
   padding: 0.55rem 0.8rem;
   border: 0;
@@ -194,8 +197,10 @@
   font: inherit;
   font-size: 0.75rem;
   font-weight: 700;
+  text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .resumeApprovalButton:hover {

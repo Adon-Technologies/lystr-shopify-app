@@ -10,6 +10,8 @@ import {
   savePendingShopifyBillingAttempt,
   waitForPendingShopifyBillingAttempt,
 } from "../app/shopify-billing-attempt.server";
+import { buildManualBillingReturnUrl } from "../app/shopify-app-pricing.server";
+import { getLegacyBillingReturnLaunchUrl } from "../app/legacy-billing-return.server";
 import { resetFakePrisma } from "./fake-db.server";
 
 const SHOP = "example.myshopify.com";
@@ -19,6 +21,82 @@ const ACTIVATES_AT = new Date("2026-07-29T12:00:00.000Z");
 
 test.beforeEach(() => {
   resetFakePrisma();
+});
+
+test("manual billing returns through Shopify's authenticated app launch URL", () => {
+  const returnUrl = new URL(
+    buildManualBillingReturnUrl({
+      cancelLegacySubscription: true,
+      deferredPlanChange: true,
+      launchUrl:
+        "https://example.myshopify.com/admin/apps/lystr-connect?old=1#ignored",
+      planKey: "basic",
+    }),
+  );
+
+  assert.equal(returnUrl.origin, "https://example.myshopify.com");
+  assert.equal(returnUrl.pathname, "/admin/apps/lystr-connect/app");
+  assert.equal(returnUrl.searchParams.get("billing_return"), "1");
+  assert.equal(returnUrl.searchParams.get("requested_plan"), "basic");
+  assert.equal(returnUrl.searchParams.get("cancel_legacy"), "1");
+  assert.equal(returnUrl.searchParams.get("deferred_plan_change"), "1");
+  assert.equal(returnUrl.searchParams.has("old"), false);
+  assert.equal(returnUrl.hash, "");
+});
+
+test("manual billing rejects a non-HTTPS launch URL", () => {
+  assert.throws(
+    () =>
+      buildManualBillingReturnUrl({
+        cancelLegacySubscription: false,
+        launchUrl: "http://example.myshopify.com/admin/apps/lystr-connect",
+        planKey: "basic",
+      }),
+    /invalid app launch URL/i,
+  );
+});
+
+test("an old direct billing callback re-enters through Shopify Admin", () => {
+  const request = new Request(
+    "https://lystr.fly.dev/app?billing_return=1&requested_plan=basic&charge_id=123",
+    {
+      headers: {
+        referer:
+          "https://example.myshopify.com/admin/charges/1/123/confirm",
+      },
+    },
+  );
+  const launchUrl = new URL(
+    getLegacyBillingReturnLaunchUrl({
+      appHandle: "lystr-connect",
+      request,
+    })!,
+  );
+
+  assert.equal(launchUrl.origin, "https://example.myshopify.com");
+  assert.equal(launchUrl.pathname, "/admin/apps/lystr-connect/app");
+  assert.equal(launchUrl.searchParams.get("requested_plan"), "basic");
+  assert.equal(launchUrl.searchParams.get("charge_id"), "123");
+});
+
+test("an authenticated embedded billing return is never redirected again", () => {
+  const request = new Request(
+    "https://lystr.fly.dev/app?billing_return=1&requested_plan=basic",
+    {
+      headers: {
+        authorization: "Bearer session-token",
+        referer: "https://example.myshopify.com/admin/apps/lystr-connect",
+      },
+    },
+  );
+
+  assert.equal(
+    getLegacyBillingReturnLaunchUrl({
+      appHandle: "lystr-connect",
+      request,
+    }),
+    null,
+  );
 });
 
 test("concurrent requests acquire exactly one creation lease", async () => {

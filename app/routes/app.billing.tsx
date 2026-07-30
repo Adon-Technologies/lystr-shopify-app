@@ -4,6 +4,7 @@ import {
   Form,
   useActionData,
   useLoaderData,
+  useNavigate,
   useNavigation,
   useRevalidator,
 } from "react-router";
@@ -166,6 +167,32 @@ type PendingApprovalState = {
   status: "PENDING" | "PROCESSING" | "UNAVAILABLE";
   subscriptionId: string | null;
 };
+
+type BillingActionData = {
+  approvalUrl?: string;
+  error?: string;
+  redirectUrl?: string;
+};
+
+function approvalNavigationResponse(approvalUrl: string) {
+  const parsedUrl = new URL(approvalUrl);
+
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error("Shopify returned an invalid billing approval URL.");
+  }
+
+  return Response.json({
+    approvalUrl: parsedUrl.toString(),
+  } satisfies BillingActionData);
+}
+
+function appNavigationResponse(redirectUrl: string) {
+  if (!redirectUrl.startsWith("/app")) {
+    throw new Error("Lystr returned an invalid in-app billing destination.");
+  }
+
+  return Response.json({ redirectUrl } satisfies BillingActionData);
+}
 
 function parseDate(value: string | null | undefined) {
   if (!value) {
@@ -1300,12 +1327,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, redirect, session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   if (!isShopifyManualBillingEnabled()) {
-    return redirect(getAppPricingPlanSelectionUrl(session.shop), {
-      target: "_top",
-    });
+    return approvalNavigationResponse(
+      getAppPricingPlanSelectionUrl(session.shop),
+    );
   }
 
   const formData = await request.formData();
@@ -1342,7 +1369,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           );
         }
 
-        return redirect(settledAttempt.confirmationUrl!, { target: "_top" });
+        return approvalNavigationResponse(settledAttempt.confirmationUrl!);
       }
 
       throw new Error(
@@ -1386,7 +1413,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           );
         }
 
-        return redirect(pendingApproval.confirmationUrl, { target: "_top" });
+        return approvalNavigationResponse(pendingApproval.confirmationUrl);
       }
 
       if (pendingApproval.message) {
@@ -1461,7 +1488,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopifySubscription: currentSubscription,
       });
 
-      return redirect("/app");
+      return appNavigationResponse("/app");
     }
 
     if (remainingPaidAccess && currentSubscription && currentPeriodEnd) {
@@ -1519,7 +1546,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         });
 
-        return redirect("/app/billing?reconnect=1&scheduled=1");
+        return appNavigationResponse("/app/billing?reconnect=1&scheduled=1");
       }
 
       const price = Number(config.planPrices?.[planKey] ?? 0);
@@ -1537,7 +1564,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const replacementActivatesAt = shouldDeferWithShopify
           ? currentPeriodEnd
           : new Date().toISOString();
-        const returnUrl = getManualBillingReturnUrl({
+        const returnUrl = await getManualBillingReturnUrl({
+          admin,
           cancelLegacySubscription: false,
           deferredPlanChange: shouldDeferWithShopify,
           planKey,
@@ -1556,7 +1584,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           shopDomain: session.shop,
         });
 
-        return redirect(pending.confirmationUrl, { target: "_top" });
+        return approvalNavigationResponse(pending.confirmationUrl);
       }
 
       await updateLystrConnectorPlanTransition({
@@ -1573,7 +1601,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopifySubscription: currentSubscription,
       });
 
-      return redirect("/app/billing?reconnect=1&scheduled=1");
+      return appNavigationResponse("/app/billing?reconnect=1&scheduled=1");
     }
 
     if (planKey === "free") {
@@ -1584,7 +1612,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopifySubscription: getFreeShopifySubscription(session.shop, config),
       });
 
-      return redirect("/app");
+      return appNavigationResponse("/app");
     }
 
     const price = Number(config.planPrices?.[planKey] ?? 0);
@@ -1595,7 +1623,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    const returnUrl = getManualBillingReturnUrl({
+    const returnUrl = await getManualBillingReturnUrl({
+      admin,
       cancelLegacySubscription:
         currentSubscription?.billingSource === "app_pricing",
       planKey,
@@ -1612,7 +1641,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shopDomain: session.shop,
     });
 
-    return redirect(pending.confirmationUrl, { target: "_top" });
+    return approvalNavigationResponse(pending.confirmationUrl);
   } catch (error) {
     if (error instanceof Response) {
       throw error;
@@ -1684,7 +1713,8 @@ function CalendarIcon() {
 
 export default function BillingPage() {
   const data = useLoaderData<typeof loader>();
-  const actionData = useActionData<{ error?: string }>();
+  const actionData = useActionData<BillingActionData>();
+  const navigate = useNavigate();
   const navigation = useNavigation();
   const revalidator = useRevalidator();
   const submittingPlanKey = navigation.formData?.get("planKey");
@@ -1737,6 +1767,17 @@ export default function BillingPage() {
             : data.pendingPlanStatus === "PENDING_APPROVAL"
               ? "Waiting for Shopify approval"
               : "Scheduled for the next billing period";
+
+  useEffect(() => {
+    if (actionData?.approvalUrl) {
+      window.open(actionData.approvalUrl, "_top");
+      return;
+    }
+
+    if (actionData?.redirectUrl) {
+      void navigate(actionData.redirectUrl);
+    }
+  }, [actionData?.approvalUrl, actionData?.redirectUrl, navigate]);
 
   useEffect(() => {
     const refreshConfiguredPricing = () => {
@@ -1874,12 +1915,15 @@ export default function BillingPage() {
             <p>{pendingApprovalCopy}</p>
           </div>
           {canResumePendingApproval && data.pendingPlanKey ? (
-            <Form method="post" className={styles.pendingApprovalForm}>
-              <input type="hidden" name="planKey" value={data.pendingPlanKey} />
-              <button className={styles.resumeApprovalButton} type="submit">
+            <div className={styles.pendingApprovalForm}>
+              <a
+                className={styles.resumeApprovalButton}
+                href={data.pendingApprovalUrl!}
+                target="_top"
+              >
                 Continue Shopify approval
-              </button>
-            </Form>
+              </a>
+            </div>
           ) : canRetryPendingCancellation ? (
             <Form method="post" className={styles.pendingApprovalForm}>
               <input type="hidden" name="planKey" value="free" />
