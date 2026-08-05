@@ -36,6 +36,8 @@ export type LystrConnectorStatus = {
   pendingShopifySubscriptionId?: string | null;
   pendingShopifyPlanRequestedAt?: string | null;
   pendingShopifyPlanActivatesAt?: string | null;
+  pendingStoreId?: string | null;
+  pendingStoreName?: string | null;
   reconnectRequired?: boolean;
   remainingBillingDays?: number;
   status: string;
@@ -82,12 +84,23 @@ export function shouldFinalizeLystrStoreConnection({
   hasLocalApiKey: boolean;
   isBillingReturn: boolean;
 }) {
-  const hasPreparedStore = Boolean(hasLocalApiKey || connector?.storeId);
+  const hasPreparedStore = Boolean(
+    hasLocalApiKey || hasVerifiedLystrStoreClaim(connector),
+  );
 
   return Boolean(
     hasPreparedStore &&
-      (isBillingReturn ||
-        (connector?.connectionPending && !connector.reconnectRequired)),
+    (isBillingReturn ||
+      (connector?.connectionPending && !connector.reconnectRequired)),
+  );
+}
+
+export function hasVerifiedLystrStoreClaim(
+  connector: LystrConnectorStatus | null | undefined,
+): connector is LystrConnectorStatus &
+  ({ storeId: string } | { pendingStoreId: string }) {
+  return Boolean(
+    connector?.storeId?.trim() || connector?.pendingStoreId?.trim(),
   );
 }
 

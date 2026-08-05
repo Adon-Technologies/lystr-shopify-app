@@ -16,6 +16,7 @@ import {
   connectLystrStore,
   getLystrConnectorConfig,
   getLystrConnectorStatus,
+  hasVerifiedLystrStoreClaim,
   recordLystrConnectorAuditEvent,
   syncLystrConnectorBilling,
   updateLystrConnectorPlanTransition,
@@ -1432,7 +1433,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    if (!connector?.storeId) {
+    if (!hasVerifiedLystrStoreClaim(connector)) {
       throw new Error("The Shopify store connection could not be verified.");
     }
 

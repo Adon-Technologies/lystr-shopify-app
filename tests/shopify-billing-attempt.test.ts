@@ -12,7 +12,10 @@ import {
 } from "../app/shopify-billing-attempt.server";
 import { buildManualBillingReturnUrl } from "../app/shopify-app-pricing.server";
 import { getLegacyBillingReturnLaunchUrl } from "../app/legacy-billing-return.server";
-import { shouldFinalizeLystrStoreConnection } from "../app/lystr.server";
+import {
+  hasVerifiedLystrStoreClaim,
+  shouldFinalizeLystrStoreConnection,
+} from "../app/lystr.server";
 import { resetFakePrisma } from "./fake-db.server";
 
 const SHOP = "example.myshopify.com";
@@ -62,8 +65,7 @@ test("an old direct billing callback re-enters through Shopify Admin", () => {
     "https://lystr.fly.dev/app?billing_return=1&requested_plan=basic&charge_id=123",
     {
       headers: {
-        referer:
-          "https://example.myshopify.com/admin/charges/1/123/confirm",
+        referer: "https://example.myshopify.com/admin/charges/1/123/confirm",
       },
     },
   );
@@ -119,6 +121,64 @@ test("an active prepared store reconnects when its credentials are still pending
       isBillingReturn: false,
     }),
     true,
+  );
+});
+
+test("billing accepts a backend-verified pending store claim", () => {
+  assert.equal(
+    hasVerifiedLystrStoreClaim({
+      accessAllowed: false,
+      billingApprovalRequired: true,
+      connectionPending: true,
+      creditsPerSuccessfulPayment: 120,
+      currency: "usd",
+      monthlyPrice: 0,
+      monthlyPriceCents: 0,
+      pendingStoreId: "pending-store-id",
+      status: "INCOMPLETE",
+      storeId: null,
+    }),
+    true,
+  );
+});
+
+test("an authenticated billing return finalizes a pending backend store claim", () => {
+  assert.equal(
+    shouldFinalizeLystrStoreConnection({
+      connector: {
+        accessAllowed: true,
+        billingApprovalRequired: false,
+        connectionPending: true,
+        creditsPerSuccessfulPayment: 120,
+        currency: "usd",
+        monthlyPrice: 10,
+        monthlyPriceCents: 1_000,
+        pendingStoreId: "pending-store-id",
+        reconnectRequired: false,
+        status: "ACTIVE",
+        storeId: null,
+      },
+      hasLocalApiKey: false,
+      isBillingReturn: true,
+    }),
+    true,
+  );
+});
+
+test("billing rejects an unverified pending flag without a store claim", () => {
+  assert.equal(
+    hasVerifiedLystrStoreClaim({
+      accessAllowed: false,
+      billingApprovalRequired: true,
+      connectionPending: true,
+      creditsPerSuccessfulPayment: 120,
+      currency: "usd",
+      monthlyPrice: 0,
+      monthlyPriceCents: 0,
+      status: "INCOMPLETE",
+      storeId: null,
+    }),
+    false,
   );
 });
 
