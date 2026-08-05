@@ -21,6 +21,7 @@ import {
   getLystrConnectorStatus,
   prepareLystrStoreConnection,
   shouldFinalizeLystrStoreConnection,
+  syncLystrConnectorBilling,
   updateLystrConnectorPlanTransition,
   type LystrConnectorStatus,
   type ShopifySubscriptionForLystr,
@@ -1083,6 +1084,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     request,
     shopDomain: session.shop,
   });
+  const reconciledConnector = statusResponse?.connector
+    ? await syncLystrConnectorBilling({
+        shopDomain: session.shop,
+        shopifySubscription: activeSubscription,
+      })
+        .then((result) => result.connector)
+        .catch((error) => {
+          console.warn(
+            "Failed to reconcile Lystr billing while opening the app.",
+            error,
+          );
+          return null;
+        })
+    : null;
 
   if (
     requestUrl.searchParams.get("cancel_legacy") === "1" &&
@@ -1107,7 +1122,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
   let connector: LystrConnectorStatus | null =
-    statusResponse?.connector ?? null;
+    reconciledConnector ?? statusResponse?.connector ?? null;
   let connected = Boolean(
     store?.connected && store.accessToken && store.shopDomain,
   );
@@ -1245,7 +1260,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : getAppPricingPlanSelectionUrl(session.shop),
     config: configResponse.config,
     connected: connector
-      ? Boolean(connector.accessAllowed && connectorHasAttachedStore)
+      ? Boolean(
+          connector.accessAllowed &&
+            connectorHasAttachedStore &&
+            connector.connectionPending !== true,
+        )
       : connected,
     connector,
     hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),

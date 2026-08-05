@@ -495,6 +495,7 @@ function subscriptionFromPartnerActiveSubscription({
     status: subscription.cancelAtEndOfCycle ? "CANCELLED" : "ACTIVE",
     test: false,
     createdAt: subscription.currentBillingCycle?.startTime ?? null,
+    currentPeriodStart: subscription.currentBillingCycle?.startTime ?? null,
     currentPeriodEnd: subscription.currentBillingCycle?.endTime ?? null,
     lineItems: [
       {

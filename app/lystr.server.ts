@@ -37,6 +37,7 @@ export type LystrConnectorStatus = {
   pendingShopifyPlanRequestedAt?: string | null;
   pendingShopifyPlanActivatesAt?: string | null;
   reconnectRequired?: boolean;
+  remainingBillingDays?: number;
   status: string;
   storeId?: string | null;
   storeName?: string | null;
@@ -56,7 +57,9 @@ export type ShopifySubscriptionForLystr = {
   status?: string | null;
   test?: boolean | null;
   createdAt?: string | null;
+  currentPeriodStart?: string | null;
   currentPeriodEnd?: string | null;
+  eventOccurredAt?: string | null;
   lineItems?: {
     id?: string | null;
     plan?: {

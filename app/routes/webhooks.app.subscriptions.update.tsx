@@ -23,6 +23,7 @@ type AppSubscriptionWebhookPayload = {
     price?: number | string | null;
     status?: string | null;
     test?: boolean | null;
+    updated_at?: string | null;
   } | null;
 };
 
@@ -90,6 +91,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ? webhookSubscription.test
         : null,
     createdAt: webhookSubscription?.created_at?.trim() || null,
+    eventOccurredAt: webhookSubscription?.updated_at?.trim() || null,
     lineItems:
       webhookPrice !== null
         ? [
