@@ -1,28 +1,26 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { syncLystrCreditTopUp } from "../lystr.server";
+import { getShopifyOneTimePurchaseWebhook } from "../shopify-one-time-purchase-webhook";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { payload, shop, topic, webhookId } = await authenticate.webhook(request);
-  const purchase = (payload as {
-    app_purchase_one_time?: {
-      admin_graphql_api_id?: string | null;
-    } | null;
-  })?.app_purchase_one_time;
-  const shopifyPurchaseId = purchase?.admin_graphql_api_id?.trim() ?? "";
+  const { payload, shop, topic, webhookId } =
+    await authenticate.webhook(request);
+  const purchase = getShopifyOneTimePurchaseWebhook(payload);
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  if (!shopifyPurchaseId) {
+  if (!purchase) {
     return new Response();
   }
 
+  // Let failures return a non-2xx response so Shopify retries the webhook.
+  // Acknowledging a failed sync can permanently strand an approved purchase.
   await syncLystrCreditTopUp({
     shopDomain: shop,
-    shopifyPurchaseId,
+    shopifyPurchaseId: purchase.id,
+    shopifyPurchaseStatus: purchase.status,
     shopifyWebhookId: webhookId,
-  }).catch((error) => {
-    console.error("Failed to sync Lystr Shopify credit top-up.", error);
   });
 
   return new Response();

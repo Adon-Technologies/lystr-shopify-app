@@ -257,6 +257,7 @@ export async function cancelLystrConnectorBilling(input: {
 export async function syncLystrCreditTopUp(input: {
   shopDomain: string;
   shopifyPurchaseId: string;
+  shopifyPurchaseStatus?: string | null;
   shopifyWebhookId?: string | null;
 }) {
   return requestLystr<{ result?: unknown }>(

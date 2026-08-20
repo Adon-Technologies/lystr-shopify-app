@@ -16,6 +16,7 @@ import {
   hasVerifiedLystrStoreClaim,
   shouldFinalizeLystrStoreConnection,
 } from "../app/lystr.server";
+import { getShopifyOneTimePurchaseWebhook } from "../app/shopify-one-time-purchase-webhook";
 import { resetFakePrisma } from "./fake-db.server";
 
 const SHOP = "example.myshopify.com";
@@ -25,6 +26,28 @@ const ACTIVATES_AT = new Date("2026-07-29T12:00:00.000Z");
 
 test.beforeEach(() => {
   resetFakePrisma();
+});
+
+test("one-time purchase webhooks expose the Shopify purchase id and status", () => {
+  assert.deepEqual(
+    getShopifyOneTimePurchaseWebhook({
+      app_purchase_one_time: {
+        admin_graphql_api_id: "gid://shopify/AppPurchaseOneTime/123",
+        status: "active",
+      },
+    }),
+    {
+      id: "gid://shopify/AppPurchaseOneTime/123",
+      status: "ACTIVE",
+    },
+  );
+});
+
+test("malformed one-time purchase webhooks are ignored", () => {
+  assert.equal(
+    getShopifyOneTimePurchaseWebhook({ app_purchase_one_time: {} }),
+    null,
+  );
 });
 
 test("manual billing returns through Shopify's authenticated app launch URL", () => {
