@@ -1067,6 +1067,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, redirect, session } = await authenticate.admin(request);
   const requestUrl = new URL(request.url);
   const isBillingReturn = requestUrl.searchParams.get("billing_return") === "1";
+  const connectionRequired =
+    requestUrl.searchParams.get("connection_required") === "1";
 
   const store = await prisma.store.findFirst({
     where: { shopDomain: session.shop },
@@ -1267,6 +1269,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         )
       : connected,
     connector,
+    connectionRequired,
     hasPendingStore: Boolean(store?.apiKey || connector?.connectionPending),
     shopDomain: session.shop,
   };
@@ -1377,7 +1380,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Index() {
-  const { appPricingUrl, config, connected, connector, hasPendingStore } =
+  const {
+    appPricingUrl,
+    config,
+    connected,
+    connectionRequired,
+    connector,
+    hasPendingStore,
+  } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
@@ -1391,6 +1401,9 @@ export default function Index() {
     : hasPendingStore
       ? "Approve Shopify billing to finish connecting this store."
       : "";
+  const connectionRequiredMessage = connectionRequired
+    ? "Connect your Lystr store before choosing a billing plan."
+    : null;
   const shouldShowPricingButton =
     status === "INCOMPLETE" ||
     status === "PAYMENT_REQUIRED" ||
@@ -1519,6 +1532,11 @@ export default function Index() {
                 Connect your{" "}
                 <span style={criticalHeroAccentStyle}>Shopify</span> store
               </h1>
+              {connectionRequiredMessage ? (
+                <p style={criticalHeroTextStyle}>
+                  {connectionRequiredMessage}
+                </p>
+              ) : null}
             </div>
 
             <Form

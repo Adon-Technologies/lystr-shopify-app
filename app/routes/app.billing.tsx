@@ -1258,6 +1258,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       request,
       shopDomain: session.shop,
     });
+
+  // A shop that has not yet been bound to a Lystr store must never remain on
+  // the billing screen. There is no verified user to attach a charge to, and
+  // leaving the plans visible turns the safe ownership check into a misleading
+  // "connection could not be verified" error when the merchant clicks one.
+  if (connector && !hasVerifiedLystrStoreClaim(connector)) {
+    throw redirect("/app?connection_required=1");
+  }
+
   const currentPlanKey =
     (connector?.shopifyPlanKey as BillingPlanKey | null | undefined) ??
     (currentSubscription?.planKey as BillingPlanKey | null | undefined) ??
@@ -1434,7 +1443,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (!hasVerifiedLystrStoreClaim(connector)) {
-      throw new Error("The Shopify store connection could not be verified.");
+      // The claim can disappear after the loader runs (for example, after an
+      // uninstall event). Return a top-level navigation response so the
+      // merchant can securely choose their Lystr store instead of receiving a
+      // generic billing failure.
+      return appNavigationResponse("/app?connection_required=1");
     }
 
     if (
