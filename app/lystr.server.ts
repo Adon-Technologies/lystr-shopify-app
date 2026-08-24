@@ -104,6 +104,14 @@ export function hasVerifiedLystrStoreClaim(
   );
 }
 
+export function getClaimedLystrStoreId(
+  connector: LystrConnectorStatus | null | undefined,
+) {
+  return (
+    connector?.pendingStoreId?.trim() || connector?.storeId?.trim() || null
+  );
+}
+
 type LystrApiResponse<T> = T & {
   error?: string;
 };

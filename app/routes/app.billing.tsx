@@ -14,6 +14,7 @@ import styles from "../styles/app-billing.module.css";
 import {
   cancelLystrConnectorBilling,
   connectLystrStore,
+  getClaimedLystrStoreId,
   getLystrConnectorConfig,
   getLystrConnectorStatus,
   hasVerifiedLystrStoreClaim,
@@ -74,6 +75,14 @@ function isPaidPlanKey(
   value: string | null | undefined,
 ): value is PaidBillingPlanKey {
   return value === "basic" || value === "pro" || value === "premium";
+}
+
+async function getClaimedLystrStore(
+  connector: LystrConnectorStatus | null | undefined,
+) {
+  const storeId = getClaimedLystrStoreId(connector);
+
+  return storeId ? prisma.store.findUnique({ where: { id: storeId } }) : null;
 }
 
 function formatPrice(value: number, currency: string) {
@@ -1003,9 +1012,7 @@ async function reconcilePendingBillingApproval({
         !activationDate || activationDate.getTime() <= Date.now();
 
       if (activationIsDue && accessToken && connector.storeId) {
-        const localStore = await prisma.store.findFirst({
-          where: { shopDomain },
-        });
+        const localStore = await getClaimedLystrStore(connector);
         const connected = await connectLystrStore({
           accessToken,
           apiKey: localStore?.apiKey ?? undefined,
@@ -1144,9 +1151,7 @@ async function loadBillingState({
       new URL(request.url).searchParams.get("billing_return") === "1") &&
     currentSubscription?.planKey === connector.pendingShopifyPlanKey
   ) {
-    const localStore = await prisma.store.findFirst({
-      where: { shopDomain },
-    });
+    const localStore = await getClaimedLystrStore(connector);
 
     if (accessToken && connector?.storeId) {
       const result = await connectLystrStore({
@@ -1191,9 +1196,7 @@ async function loadBillingState({
   );
 
   if (accessToken && activeSubscriptionNeedsAdoption && currentSubscription) {
-    const localStore = await prisma.store.findFirst({
-      where: { shopDomain },
-    });
+    const localStore = await getClaimedLystrStore(connector);
 
     if (currentSubscription.id && isPaidPlanKey(currentSubscription.planKey)) {
       const scheduled = await updateLystrConnectorPlanTransition({
@@ -1397,9 +1400,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         request,
         shopDomain: session.shop,
       });
-    const localStore = await prisma.store.findFirst({
-      where: { shopDomain: session.shop },
-    });
+    const localStore = await getClaimedLystrStore(connector);
 
     if (!session.accessToken) {
       throw new Error("The Shopify store connection could not be verified.");

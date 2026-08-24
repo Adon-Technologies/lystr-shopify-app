@@ -17,6 +17,7 @@ import prisma from "../db.server";
 import styles from "../styles/app-index.module.css";
 import {
   connectLystrStore,
+  getClaimedLystrStoreId,
   getLystrConnectorConfig,
   getLystrConnectorStatus,
   prepareLystrStoreConnection,
@@ -1070,9 +1071,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const connectionRequired =
     requestUrl.searchParams.get("connection_required") === "1";
 
-  const store = await prisma.store.findFirst({
-    where: { shopDomain: session.shop },
-  });
   const configResponse = await getLystrConnectorConfig();
   const statusResponse = await getLystrConnectorStatus({
     shopDomain: session.shop,
@@ -1125,6 +1123,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
   let connector: LystrConnectorStatus | null =
     reconciledConnector ?? statusResponse?.connector ?? null;
+  const claimedStoreId = getClaimedLystrStoreId(connector);
+  const store = claimedStoreId
+    ? await prisma.store.findUnique({ where: { id: claimedStoreId } })
+    : await prisma.store.findFirst({
+        where: {
+          accessToken: { not: null },
+          connected: true,
+          shopDomain: session.shop,
+        },
+      });
   let connected = Boolean(
     store?.connected && store.accessToken && store.shopDomain,
   );
@@ -1264,8 +1272,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     connected: connector
       ? Boolean(
           connector.accessAllowed &&
-            connectorHasAttachedStore &&
-            connector.connectionPending !== true,
+          connectorHasAttachedStore &&
+          connector.connectionPending !== true,
         )
       : connected,
     connector,
@@ -1387,8 +1395,7 @@ export default function Index() {
     connectionRequired,
     connector,
     hasPendingStore,
-  } =
-    useLoaderData<typeof loader>();
+  } = useLoaderData<typeof loader>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
   const isConnectingStore =
@@ -1533,9 +1540,7 @@ export default function Index() {
                 <span style={criticalHeroAccentStyle}>Shopify</span> store
               </h1>
               {connectionRequiredMessage ? (
-                <p style={criticalHeroTextStyle}>
-                  {connectionRequiredMessage}
-                </p>
+                <p style={criticalHeroTextStyle}>{connectionRequiredMessage}</p>
               ) : null}
             </div>
 

@@ -13,6 +13,7 @@ import {
 import { buildManualBillingReturnUrl } from "../app/shopify-app-pricing.server";
 import { getLegacyBillingReturnLaunchUrl } from "../app/legacy-billing-return.server";
 import {
+  getClaimedLystrStoreId,
   hasVerifiedLystrStoreClaim,
   shouldFinalizeLystrStoreConnection,
 } from "../app/lystr.server";
@@ -162,6 +163,24 @@ test("billing accepts a backend-verified pending store claim", () => {
       storeId: null,
     }),
     true,
+  );
+});
+
+test("a pending claim selects its exact Lystr store instead of a stale domain match", () => {
+  assert.equal(
+    getClaimedLystrStoreId({
+      accessAllowed: false,
+      billingApprovalRequired: true,
+      connectionPending: true,
+      creditsPerSuccessfulPayment: 0,
+      currency: "usd",
+      monthlyPrice: 0,
+      monthlyPriceCents: 0,
+      pendingStoreId: "new-sanders-mode-store",
+      status: "INCOMPLETE",
+      storeId: "old-sanders-mode-store",
+    }),
+    "new-sanders-mode-store",
   );
 });
 
