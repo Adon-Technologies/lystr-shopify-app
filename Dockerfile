@@ -13,6 +13,6 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY . .
 
-RUN npm run build
+RUN npm run setup && npm run build
 
 CMD ["npm", "run", "docker-start"]
