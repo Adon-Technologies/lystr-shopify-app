@@ -18,6 +18,12 @@ import {
   shouldFinalizeLystrStoreConnection,
 } from "../app/lystr.server";
 import { getShopifyOneTimePurchaseWebhook } from "../app/shopify-one-time-purchase-webhook";
+import {
+  canReconnectWithStoredPaidEntitlement,
+  FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR,
+  hasRemainingPaidShopifyAccess,
+  shouldReuseCurrentPaidPlan,
+} from "../app/shopify-billing-policy";
 import { resetFakePrisma } from "./fake-db.server";
 
 const SHOP = "example.myshopify.com";
@@ -54,8 +60,6 @@ test("malformed one-time purchase webhooks are ignored", () => {
 test("manual billing returns through Shopify's authenticated app launch URL", () => {
   const returnUrl = new URL(
     buildManualBillingReturnUrl({
-      cancelLegacySubscription: true,
-      deferredPlanChange: true,
       launchUrl:
         "https://example.myshopify.com/admin/apps/lystr-connect?old=1#ignored",
       planKey: "basic",
@@ -66,8 +70,8 @@ test("manual billing returns through Shopify's authenticated app launch URL", ()
   assert.equal(returnUrl.pathname, "/admin/apps/lystr-connect/app");
   assert.equal(returnUrl.searchParams.get("billing_return"), "1");
   assert.equal(returnUrl.searchParams.get("requested_plan"), "basic");
-  assert.equal(returnUrl.searchParams.get("cancel_legacy"), "1");
-  assert.equal(returnUrl.searchParams.get("deferred_plan_change"), "1");
+  assert.equal(returnUrl.searchParams.has("cancel_legacy"), false);
+  assert.equal(returnUrl.searchParams.has("deferred_plan_change"), false);
   assert.equal(returnUrl.searchParams.has("old"), false);
   assert.equal(returnUrl.hash, "");
 });
@@ -76,7 +80,6 @@ test("manual billing rejects a non-HTTPS launch URL", () => {
   assert.throws(
     () =>
       buildManualBillingReturnUrl({
-        cancelLegacySubscription: false,
         launchUrl: "http://example.myshopify.com/admin/apps/lystr-connect",
         planKey: "basic",
       }),
@@ -84,9 +87,95 @@ test("manual billing rejects a non-HTTPS launch URL", () => {
   );
 });
 
+test("fresh paid selections atomically replace the old plan after Shopify approval", () => {
+  assert.equal(FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR, "APPLY_IMMEDIATELY");
+});
+
+test("same canceled plan reuses its unexpired entitlement without a new charge", () => {
+  const periodEnd = "2026-09-10T00:00:00.000Z";
+  const remainingPaidAccess = hasRemainingPaidShopifyAccess({
+    connector: {
+      accessAllowed: true,
+      billingApprovalRequired: false,
+      creditsPerSuccessfulPayment: 700,
+      currency: "usd",
+      monthlyPrice: 49,
+      monthlyPriceCents: 4_900,
+      nextBillingDate: periodEnd,
+      shopifyPlanKey: "pro",
+      shopifySubscriptionStatus: "CANCELLED",
+      status: "CANCELED",
+    },
+    currentPlanKey: "pro",
+    now: new Date("2026-08-20T00:00:00.000Z"),
+    subscription: {
+      id: "gid://shopify/AppSubscription/pro",
+      planKey: "pro",
+      status: "CANCELLED",
+    },
+  });
+
+  assert.equal(remainingPaidAccess, true);
+  assert.equal(
+    shouldReuseCurrentPaidPlan({
+      currentPlanKey: "pro",
+      currentSubscriptionStatus: "CANCELLED",
+      remainingPaidAccess,
+      selectedPlanKey: "pro",
+    }),
+    true,
+  );
+  assert.equal(
+    canReconnectWithStoredPaidEntitlement({
+      accessAllowed: true,
+      billingApprovalRequired: false,
+      creditsPerSuccessfulPayment: 700,
+      currency: "usd",
+      monthlyPrice: 49,
+      monthlyPriceCents: 4_900,
+      nextBillingDate: periodEnd,
+      shopifyPlanKey: "pro",
+      shopifySubscriptionStatus: "CANCELLED",
+      status: "CANCELED",
+    }),
+    true,
+  );
+});
+
+test("same canceled plan requires a new approval after its entitlement expires", () => {
+  const remainingPaidAccess = hasRemainingPaidShopifyAccess({
+    connector: {
+      accessAllowed: false,
+      billingApprovalRequired: true,
+      creditsPerSuccessfulPayment: 700,
+      currency: "usd",
+      monthlyPrice: 49,
+      monthlyPriceCents: 4_900,
+      nextBillingDate: "2026-09-10T00:00:00.000Z",
+      shopifyPlanKey: "pro",
+      shopifySubscriptionStatus: "CANCELLED",
+      status: "CANCELED",
+    },
+    currentPlanKey: "pro",
+    now: new Date("2026-09-10T00:00:00.001Z"),
+    subscription: null,
+  });
+
+  assert.equal(remainingPaidAccess, false);
+  assert.equal(
+    shouldReuseCurrentPaidPlan({
+      currentPlanKey: "pro",
+      currentSubscriptionStatus: "CANCELLED",
+      remainingPaidAccess,
+      selectedPlanKey: "pro",
+    }),
+    false,
+  );
+});
+
 test("an old direct billing callback re-enters through Shopify Admin", () => {
   const request = new Request(
-    "https://lystr.fly.dev/app?billing_return=1&requested_plan=basic&charge_id=123",
+    "https://lystr.fly.dev/app?billing_return=1&requested_plan=basic&charge_id=123&cancel_legacy=1&deferred_plan_change=1",
     {
       headers: {
         referer: "https://example.myshopify.com/admin/charges/1/123/confirm",
@@ -103,6 +192,8 @@ test("an old direct billing callback re-enters through Shopify Admin", () => {
   assert.equal(launchUrl.origin, "https://example.myshopify.com");
   assert.equal(launchUrl.pathname, "/admin/apps/lystr-connect/app");
   assert.equal(launchUrl.searchParams.get("requested_plan"), "basic");
+  assert.equal(launchUrl.searchParams.has("cancel_legacy"), false);
+  assert.equal(launchUrl.searchParams.has("deferred_plan_change"), false);
   assert.equal(launchUrl.searchParams.get("charge_id"), "123");
 });
 

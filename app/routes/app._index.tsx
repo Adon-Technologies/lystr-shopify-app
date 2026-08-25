@@ -28,7 +28,6 @@ import {
   type ShopifySubscriptionForLystr,
 } from "../lystr.server";
 import {
-  cancelCurrentAppPricingSubscription,
   getAppPricingPlanSelectionUrl,
   getCurrentShopifyBillingSubscription,
   isShopifyManualBillingEnabled,
@@ -38,6 +37,7 @@ import {
   clearShopifyBillingAttempt,
   getShopifyBillingAttempt,
 } from "../shopify-billing-attempt.server";
+import { canReconnectWithStoredPaidEntitlement } from "../shopify-billing-policy";
 
 const LYSTR_STORES_URL = "https://lystr.ai/stores";
 const APP_FONT =
@@ -1099,28 +1099,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         })
     : null;
 
-  if (
-    requestUrl.searchParams.get("cancel_legacy") === "1" &&
-    activeSubscription?.billingSource === "manual"
-  ) {
-    try {
-      await cancelCurrentAppPricingSubscription({ admin });
-      throw redirect("/app");
-    } catch (error) {
-      if (error instanceof Response) {
-        throw error;
-      }
-
-      console.error(
-        "Failed to cancel the replaced App Pricing subscription.",
-        error,
-      );
-      throw new Response(
-        "Your new plan is active, but Shopify has not confirmed cancellation of the previous App Pricing plan. Reload to retry before using Lystr.",
-        { status: 502 },
-      );
-    }
-  }
   let connector: LystrConnectorStatus | null =
     reconciledConnector ?? statusResponse?.connector ?? null;
   const claimedStoreId = getClaimedLystrStoreId(connector);
@@ -1349,7 +1327,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ success: true } satisfies ActionData);
     }
 
-    if (prepared.connector.status === "GRANDFATHERED") {
+    if (
+      prepared.connector.status === "GRANDFATHERED" ||
+      canReconnectWithStoredPaidEntitlement(prepared.connector)
+    ) {
       await connectLystrStore({
         accessToken: session.accessToken,
         apiKey,

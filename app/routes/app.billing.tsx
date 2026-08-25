@@ -46,10 +46,18 @@ import {
   savePendingShopifyBillingAttempt,
   waitForPendingShopifyBillingAttempt,
 } from "../shopify-billing-attempt.server";
-
-const PLAN_KEYS = ["free", "basic", "pro", "premium"] as const;
-type BillingPlanKey = (typeof PLAN_KEYS)[number];
-type PaidBillingPlanKey = Exclude<BillingPlanKey, "free">;
+import {
+  BILLING_PLAN_KEYS as PLAN_KEYS,
+  FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR,
+  getShopifySubscriptionEnd as getSubscriptionEnd,
+  hasRemainingPaidShopifyAccess as hasRemainingPaidAccess,
+  isBillingPlanKey as isPlanKey,
+  isCanceledShopifySubscriptionStatus,
+  isPaidBillingPlanKey as isPaidPlanKey,
+  shouldReuseCurrentPaidPlan,
+  type BillingPlanKey,
+  type PaidBillingPlanKey,
+} from "../shopify-billing-policy";
 
 const TERMINAL_PENDING_SUBSCRIPTION_STATUSES = new Set([
   "CANCELLED",
@@ -64,18 +72,6 @@ const PLAN_LABELS: Record<BillingPlanKey, string> = {
   pro: "Pro",
   premium: "Premium",
 };
-
-function isPlanKey(value: FormDataEntryValue | null): value is BillingPlanKey {
-  return (
-    typeof value === "string" && PLAN_KEYS.includes(value as BillingPlanKey)
-  );
-}
-
-function isPaidPlanKey(
-  value: string | null | undefined,
-): value is PaidBillingPlanKey {
-  return value === "basic" || value === "pro" || value === "premium";
-}
 
 async function getClaimedLystrStore(
   connector: LystrConnectorStatus | null | undefined,
@@ -118,57 +114,6 @@ function getSubscriptionPrice(
   );
 
   return Number.isFinite(amount) && amount > 0 ? amount : 0;
-}
-
-function getSubscriptionCurrency(
-  subscription?: ShopifySubscriptionForLystr | null,
-) {
-  return (
-    subscription?.lineItems?.[0]?.plan?.pricingDetails?.price?.currencyCode
-      ?.trim()
-      .toLowerCase() ?? ""
-  );
-}
-
-function getSubscriptionEnd(
-  subscription: ShopifySubscriptionForLystr | null,
-  connector: LystrConnectorStatus | null,
-) {
-  return subscription?.currentPeriodEnd ?? connector?.nextBillingDate ?? null;
-}
-
-function hasRemainingPaidAccess({
-  connector,
-  currentPlanKey,
-  subscription,
-}: {
-  connector: LystrConnectorStatus | null;
-  currentPlanKey: string | null;
-  subscription: ShopifySubscriptionForLystr | null;
-}) {
-  if (!currentPlanKey || currentPlanKey === "free") {
-    return false;
-  }
-
-  const status = (
-    subscription?.status ??
-    connector?.shopifySubscriptionStatus ??
-    connector?.status
-  )
-    ?.trim()
-    .toUpperCase();
-  const periodEnd = getSubscriptionEnd(subscription, connector);
-  const periodEndDate = periodEnd ? new Date(periodEnd) : null;
-
-  return Boolean(
-    connector?.accessAllowed &&
-    status !== "FROZEN" &&
-    status !== "DECLINED" &&
-    status !== "EXPIRED" &&
-    periodEndDate &&
-    !Number.isNaN(periodEndDate.getTime()) &&
-    periodEndDate.getTime() > Date.now(),
-  );
 }
 
 type PendingApprovalState = {
@@ -1486,29 +1431,44 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    if (remainingPaidAccess && !currentSubscription) {
-      throw new Error(
-        "Lystr could not verify the existing Shopify subscription, so no new charge was created. Reload and try again.",
-      );
-    }
-
     if (
-      remainingPaidAccess &&
-      currentSubscription &&
-      planKey === currentPlanKey
+      shouldReuseCurrentPaidPlan({
+        currentPlanKey,
+        currentSubscriptionStatus:
+          currentSubscription?.status ?? connector.shopifySubscriptionStatus,
+        remainingPaidAccess,
+        selectedPlanKey: planKey,
+      })
     ) {
       await connectLystrStore({
         accessToken: session.accessToken,
         apiKey: localStore?.apiKey ?? undefined,
         shopDomain: session.shop,
-        shopifySubscription: currentSubscription,
+        shopifySubscription: currentSubscription ?? undefined,
       });
 
       return appNavigationResponse("/app");
     }
 
-    if (remainingPaidAccess && currentSubscription && currentPeriodEnd) {
-      if (planKey === "free") {
+    const hasTrustedStoredCanceledEntitlement = Boolean(
+      remainingPaidAccess &&
+      isCanceledShopifySubscriptionStatus(
+        currentSubscription?.status ?? connector.shopifySubscriptionStatus,
+      ),
+    );
+
+    if (
+      remainingPaidAccess &&
+      !currentSubscription &&
+      !hasTrustedStoredCanceledEntitlement
+    ) {
+      throw new Error(
+        "Lystr could not verify the existing Shopify subscription, so no new charge was created. Reload and try again.",
+      );
+    }
+
+    if (planKey === "free") {
+      if (remainingPaidAccess && currentPeriodEnd) {
         await updateLystrConnectorPlanTransition({
           action: "schedule",
           activatesAt: currentPeriodEnd,
@@ -1518,7 +1478,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
 
         if (
-          currentSubscription.billingSource === "manual" &&
+          currentSubscription?.billingSource === "manual" &&
           currentSubscription.status?.trim().toUpperCase() === "ACTIVE" &&
           currentSubscription.id
         ) {
@@ -1527,14 +1487,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             subscriptionId: currentSubscription.id,
           });
         } else if (
-          currentSubscription.billingSource === "app_pricing" &&
+          currentSubscription?.billingSource === "app_pricing" &&
           currentSubscription.status?.trim().toUpperCase() === "ACTIVE"
         ) {
           await cancelLystrConnectorBilling({
             shopDomain: session.shop,
           });
         } else if (
-          currentSubscription.status?.trim().toUpperCase() === "ACTIVE"
+          currentSubscription?.status?.trim().toUpperCase() === "ACTIVE"
         ) {
           throw new Error(
             "Lystr could not identify the active Shopify billing source, so the paid plan was not cancelled.",
@@ -1553,74 +1513,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           accessToken: session.accessToken,
           apiKey: localStore?.apiKey ?? undefined,
           shopDomain: session.shop,
-          shopifySubscription: {
-            ...currentSubscription,
-            status:
-              currentSubscription.status?.trim().toUpperCase() === "ACTIVE"
-                ? "CANCELLED"
-                : currentSubscription.status,
-          },
+          shopifySubscription: currentSubscription
+            ? {
+                ...currentSubscription,
+                status:
+                  currentSubscription.status?.trim().toUpperCase() === "ACTIVE"
+                    ? "CANCELLED"
+                    : currentSubscription.status,
+              }
+            : undefined,
         });
 
         return appNavigationResponse("/app/billing?reconnect=1&scheduled=1");
       }
 
-      const price = Number(config.planPrices?.[planKey] ?? 0);
-
-      const canCreateManualReplacement =
-        currentSubscription.billingSource === "manual" &&
-        currentSubscription.status?.trim().toUpperCase() === "ACTIVE" &&
-        Number.isFinite(price) &&
-        price > 0;
-
-      if (canCreateManualReplacement) {
-        const shouldDeferWithShopify =
-          getSubscriptionCurrency(currentSubscription) ===
-          config.currency.trim().toLowerCase();
-        const replacementActivatesAt = shouldDeferWithShopify
-          ? currentPeriodEnd
-          : new Date().toISOString();
-        const returnUrl = await getManualBillingReturnUrl({
-          admin,
-          cancelLegacySubscription: false,
-          deferredPlanChange: shouldDeferWithShopify,
-          planKey,
-        });
-        const pending = await startManualBillingApproval({
-          accessToken: session.accessToken,
-          activatesAt: replacementActivatesAt,
-          admin,
-          config,
-          planKey,
-          requestToken: lease.requestToken,
-          replacementBehavior: shouldDeferWithShopify
-            ? "APPLY_ON_NEXT_BILLING_CYCLE"
-            : "APPLY_IMMEDIATELY",
-          returnUrl,
-          shopDomain: session.shop,
-        });
-
-        return approvalNavigationResponse(pending.confirmationUrl);
-      }
-
-      await updateLystrConnectorPlanTransition({
-        action: "schedule",
-        activatesAt: currentPeriodEnd,
-        planKey,
-        shopDomain: session.shop,
-        status: "SCHEDULED",
-      });
-      await connectLystrStore({
-        accessToken: session.accessToken,
-        apiKey: localStore?.apiKey ?? undefined,
-        shopDomain: session.shop,
-        shopifySubscription: currentSubscription,
-      });
-
-      return appNavigationResponse("/app/billing?reconnect=1&scheduled=1");
-    }
-
-    if (planKey === "free") {
       await connectLystrStore({
         accessToken: session.accessToken,
         apiKey: localStore?.apiKey ?? undefined,
@@ -1639,12 +1545,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    const returnUrl = await getManualBillingReturnUrl({
-      admin,
-      cancelLegacySubscription:
-        currentSubscription?.billingSource === "app_pricing",
-      planKey,
-    });
+    const returnUrl = await getManualBillingReturnUrl({ admin, planKey });
     const pending = await startManualBillingApproval({
       accessToken: session.accessToken,
       activatesAt: new Date().toISOString(),
@@ -1652,7 +1553,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       config,
       planKey,
       requestToken: lease.requestToken,
-      replacementBehavior: "APPLY_IMMEDIATELY",
+      // Shopify replaces the old contract only when the merchant approves the
+      // new charge. That starts the new 30-day cycle immediately without
+      // risking cancellation of the newly activated subscription on return.
+      replacementBehavior: FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR,
       returnUrl,
       shopDomain: session.shop,
     });
@@ -1978,9 +1882,14 @@ export default function BillingPage() {
             data.isReconnectMode && data.remainingPaidAccess && isCurrent;
           const currentWithoutReconnect =
             isCurrent && !data.isReconnectMode && data.remainingPaidAccess;
-          const switchAfterPeriod = data.remainingPaidAccess && !isCurrent;
+          const switchesPaidPlanImmediately = Boolean(
+            data.remainingPaidAccess && !isCurrent && plan.key !== "free",
+          );
+          const switchesToFreeAfterPeriod = Boolean(
+            data.remainingPaidAccess && !isCurrent && plan.key === "free",
+          );
           const requiresNewCharge =
-            plan.key !== "free" && !reconnectSamePlan && !switchAfterPeriod;
+            plan.key !== "free" && !(isCurrent && data.remainingPaidAccess);
           const isDisabled =
             isSubmitting ||
             hasBlockingBillingTransition ||
@@ -1997,13 +1906,15 @@ export default function BillingPage() {
                   ? "Reconnect"
                   : currentWithoutReconnect
                     ? "Current plan"
-                    : switchAfterPeriod
-                      ? "Switch after current period"
-                      : plan.key === "free"
-                        ? "Select plan"
-                        : !plan.isConfigured
-                          ? "Not configured"
-                          : "Approve payment";
+                    : switchesPaidPlanImmediately
+                      ? "Change plan & approve payment"
+                      : switchesToFreeAfterPeriod
+                        ? "Switch after current period"
+                        : plan.key === "free"
+                          ? "Select plan"
+                          : !plan.isConfigured
+                            ? "Not configured"
+                            : "Approve payment";
 
           return (
             <article

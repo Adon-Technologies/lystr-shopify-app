@@ -62,12 +62,6 @@ export function getLegacyBillingReturnLaunchUrl({
   launchUrl.searchParams.set("billing_return", "1");
   launchUrl.searchParams.set("requested_plan", requestedPlan);
 
-  for (const flag of ["cancel_legacy", "deferred_plan_change"]) {
-    if (requestUrl.searchParams.get(flag) === "1") {
-      launchUrl.searchParams.set(flag, "1");
-    }
-  }
-
   const chargeId = requestUrl.searchParams.get("charge_id")?.trim() ?? "";
 
   if (/^\d+$/.test(chargeId)) {

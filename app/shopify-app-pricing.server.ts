@@ -686,13 +686,9 @@ export function getFreeShopifySubscription(
 }
 
 export function buildManualBillingReturnUrl({
-  cancelLegacySubscription,
-  deferredPlanChange = false,
   launchUrl,
   planKey,
 }: {
-  cancelLegacySubscription: boolean;
-  deferredPlanChange?: boolean;
   launchUrl: string;
   planKey: AppPricingPlanKey;
 }) {
@@ -708,26 +704,14 @@ export function buildManualBillingReturnUrl({
   url.searchParams.set("billing_return", "1");
   url.searchParams.set("requested_plan", planKey);
 
-  if (cancelLegacySubscription) {
-    url.searchParams.set("cancel_legacy", "1");
-  }
-
-  if (deferredPlanChange) {
-    url.searchParams.set("deferred_plan_change", "1");
-  }
-
   return url.toString();
 }
 
 export async function getManualBillingReturnUrl({
   admin,
-  cancelLegacySubscription,
-  deferredPlanChange = false,
   planKey,
 }: {
   admin: AdminGraphqlClient;
-  cancelLegacySubscription: boolean;
-  deferredPlanChange?: boolean;
   planKey: AppPricingPlanKey;
 }) {
   const response = await admin.graphql(MANUAL_BILLING_RETURN_URL_QUERY);
@@ -749,8 +733,6 @@ export async function getManualBillingReturnUrl({
   }
 
   return buildManualBillingReturnUrl({
-    cancelLegacySubscription,
-    deferredPlanChange,
     launchUrl,
     planKey,
   });
