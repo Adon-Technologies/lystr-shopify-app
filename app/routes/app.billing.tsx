@@ -49,6 +49,7 @@ import {
 import {
   BILLING_PLAN_KEYS as PLAN_KEYS,
   FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR,
+  getEffectiveShopifySubscriptionPrice,
   getShopifySubscriptionEnd as getSubscriptionEnd,
   hasRemainingPaidShopifyAccess as hasRemainingPaidAccess,
   isBillingPlanKey as isPlanKey,
@@ -1219,14 +1220,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     (connector?.shopifyPlanKey as BillingPlanKey | null | undefined) ??
     (currentSubscription?.planKey as BillingPlanKey | null | undefined) ??
     null;
-  const currentSubscriptionPrice =
-    getSubscriptionPrice(currentSubscription) ||
-    Number(connector?.monthlyPrice ?? 0);
-  const remainingPaidAccess = hasRemainingPaidAccess({
-    connector,
-    currentPlanKey,
+  const currentSubscriptionPrice = getEffectiveShopifySubscriptionPrice({
+    connectorMonthlyPrice: connector?.monthlyPrice,
     subscription: currentSubscription,
   });
+  const currentPaidPlanHasRealPrice =
+    !isPaidPlanKey(currentPlanKey) || currentSubscriptionPrice > 0;
+  const remainingPaidAccess =
+    currentPaidPlanHasRealPrice &&
+    hasRemainingPaidAccess({
+      connector,
+      currentPlanKey,
+      subscription: currentSubscription,
+    });
   const currentPeriodEnd = getSubscriptionEnd(currentSubscription, connector);
   const url = new URL(request.url);
   const reconnectRequested = url.searchParams.get("reconnect") === "1";
@@ -1355,11 +1361,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       (connector?.shopifyPlanKey as BillingPlanKey | null | undefined) ??
       (currentSubscription?.planKey as BillingPlanKey | null | undefined) ??
       null;
-    const remainingPaidAccess = hasRemainingPaidAccess({
-      connector,
-      currentPlanKey,
+    const currentSubscriptionPrice = getEffectiveShopifySubscriptionPrice({
+      connectorMonthlyPrice: connector?.monthlyPrice,
       subscription: currentSubscription,
     });
+    const currentPaidPlanHasRealPrice =
+      !isPaidPlanKey(currentPlanKey) || currentSubscriptionPrice > 0;
+    const remainingPaidAccess =
+      currentPaidPlanHasRealPrice &&
+      hasRemainingPaidAccess({
+        connector,
+        currentPlanKey,
+        subscription: currentSubscription,
+      });
     const currentPeriodEnd = getSubscriptionEnd(currentSubscription, connector);
 
     if (pendingApproval) {
@@ -1419,6 +1433,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const hasUnreconciledActiveSubscription = Boolean(
       currentSubscription?.id &&
       isPaidPlanKey(currentSubscription.planKey) &&
+      getSubscriptionPrice(currentSubscription) > 0 &&
       (currentShopifyStatus === "ACTIVE" ||
         currentShopifyStatus === "ACCEPTED") &&
       (!connector.accessAllowed ||
@@ -1432,6 +1447,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (
+      currentPaidPlanHasRealPrice &&
       shouldReuseCurrentPaidPlan({
         currentPlanKey,
         currentSubscriptionStatus:

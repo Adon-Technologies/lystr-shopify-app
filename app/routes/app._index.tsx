@@ -37,7 +37,10 @@ import {
   clearShopifyBillingAttempt,
   getShopifyBillingAttempt,
 } from "../shopify-billing-attempt.server";
-import { canReconnectWithStoredPaidEntitlement } from "../shopify-billing-policy";
+import {
+  canReconnectWithStoredPaidEntitlement,
+  canUseCurrentShopifySubscription,
+} from "../shopify-billing-policy";
 
 const LYSTR_STORES_URL = "https://lystr.ai/stores";
 const APP_FONT =
@@ -675,33 +678,6 @@ function getErrorMessage(error: unknown) {
 
 function isBillingApprovalRequiredMessage(message: string) {
   return message.toLowerCase().includes("billing approval is required");
-}
-
-function hasRemainingSubscriptionAccess(
-  subscription: ShopifySubscriptionForLystr,
-) {
-  if (!subscription.currentPeriodEnd) {
-    return false;
-  }
-
-  const currentPeriodEnd = new Date(subscription.currentPeriodEnd);
-
-  return (
-    !Number.isNaN(currentPeriodEnd.getTime()) &&
-    currentPeriodEnd.getTime() > Date.now()
-  );
-}
-
-function canUseCurrentShopifySubscription(
-  subscription: ShopifySubscriptionForLystr,
-) {
-  const status = subscription.status?.trim().toUpperCase();
-
-  if (status === "CANCELED" || status === "CANCELLED") {
-    return hasRemainingSubscriptionAccess(subscription);
-  }
-
-  return status === "ACTIVE" || status === "ACCEPTED";
 }
 
 function formatConnectorDate(value?: string | null) {

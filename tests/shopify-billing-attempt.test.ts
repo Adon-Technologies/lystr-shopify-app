@@ -20,7 +20,9 @@ import {
 import { getShopifyOneTimePurchaseWebhook } from "../app/shopify-one-time-purchase-webhook";
 import {
   canReconnectWithStoredPaidEntitlement,
+  canUseCurrentShopifySubscription,
   FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR,
+  getEffectiveShopifySubscriptionPrice,
   hasRemainingPaidShopifyAccess,
   shouldReuseCurrentPaidPlan,
 } from "../app/shopify-billing-policy";
@@ -89,6 +91,70 @@ test("manual billing rejects a non-HTTPS launch URL", () => {
 
 test("fresh paid selections atomically replace the old plan after Shopify approval", () => {
   assert.equal(FRESH_PAID_PLAN_REPLACEMENT_BEHAVIOR, "APPLY_IMMEDIATELY");
+});
+
+test("a zero-price paid plan cannot bypass Shopify payment approval", () => {
+  assert.equal(
+    canUseCurrentShopifySubscription({
+      id: SUBSCRIPTION_ID,
+      planKey: "pro",
+      status: "ACTIVE",
+      currentPeriodEnd: "2026-09-20T00:00:00.000Z",
+      lineItems: [
+        {
+          plan: {
+            pricingDetails: {
+              price: { amount: 0, currencyCode: "USD" },
+            },
+          },
+        },
+      ],
+    }),
+    false,
+  );
+});
+
+test("a positive-price paid plan remains usable after approval", () => {
+  assert.equal(
+    canUseCurrentShopifySubscription({
+      id: SUBSCRIPTION_ID,
+      planKey: "premium",
+      status: "ACTIVE",
+      lineItems: [
+        {
+          plan: {
+            pricingDetails: {
+              price: { amount: 100, currencyCode: "USD" },
+            },
+          },
+        },
+      ],
+    }),
+    true,
+  );
+});
+
+test("Shopify's live zero price overrides a stale paid connector price", () => {
+  assert.equal(
+    getEffectiveShopifySubscriptionPrice({
+      connectorMonthlyPrice: 100,
+      subscription: {
+        id: SUBSCRIPTION_ID,
+        planKey: "pro",
+        status: "ACTIVE",
+        lineItems: [
+          {
+            plan: {
+              pricingDetails: {
+                price: { amount: 0, currencyCode: "USD" },
+              },
+            },
+          },
+        ],
+      },
+    }),
+    0,
+  );
 });
 
 test("same canceled plan reuses its unexpired entitlement without a new charge", () => {

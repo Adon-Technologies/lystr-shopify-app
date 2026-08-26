@@ -25,6 +25,60 @@ export function isPaidBillingPlanKey(
   return value === "basic" || value === "pro" || value === "premium";
 }
 
+function getSubscriptionPrice(
+  subscription: ShopifySubscriptionForLystr | null | undefined,
+) {
+  const amount = Number(
+    subscription?.lineItems?.[0]?.plan?.pricingDetails?.price?.amount,
+  );
+
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
+export function getEffectiveShopifySubscriptionPrice({
+  connectorMonthlyPrice,
+  subscription,
+}: {
+  connectorMonthlyPrice?: number | null;
+  subscription: ShopifySubscriptionForLystr | null | undefined;
+}) {
+  if (subscription) {
+    return getSubscriptionPrice(subscription);
+  }
+
+  const cachedAmount = Number(connectorMonthlyPrice ?? 0);
+  return Number.isFinite(cachedAmount) && cachedAmount > 0 ? cachedAmount : 0;
+}
+
+export function canUseCurrentShopifySubscription(
+  subscription: ShopifySubscriptionForLystr,
+  now = new Date(),
+) {
+  const status = subscription.status?.trim().toUpperCase();
+  const planKey = subscription.planKey?.trim().toLowerCase();
+  const paidPlanHasARealPrice =
+    isPaidBillingPlanKey(planKey) && getSubscriptionPrice(subscription) > 0;
+  const freePlanIsValid = planKey === "free";
+
+  if (!paidPlanHasARealPrice && !freePlanIsValid) {
+    return false;
+  }
+
+  if (status === "CANCELED" || status === "CANCELLED") {
+    const currentPeriodEnd = subscription.currentPeriodEnd
+      ? new Date(subscription.currentPeriodEnd)
+      : null;
+
+    return Boolean(
+      currentPeriodEnd &&
+        !Number.isNaN(currentPeriodEnd.getTime()) &&
+        currentPeriodEnd.getTime() > now.getTime(),
+    );
+  }
+
+  return status === "ACTIVE" || status === "ACCEPTED";
+}
+
 export function getShopifySubscriptionEnd(
   subscription: ShopifySubscriptionForLystr | null,
   connector: LystrConnectorStatus | null,
